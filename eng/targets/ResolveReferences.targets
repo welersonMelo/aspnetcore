@@ -62,7 +62,7 @@
       Turn Reference items into a ProjectReference when UseProjectReferences is true.
       Order matters. This comes before package resolution because projects should be used when possible instead of packages.
     -->
-    <_ProjectReferenceByAssemblyName Condition="'$(UseProjectReferences)' == 'true'"
+    <_ProjectReferenceByAssemblyName Condition=" $(UseProjectReferences) "
       Include="@(ProjectReferenceProvider)"
       Exclude="@(_UnusedProjectReferenceProvider)" />
 
@@ -146,6 +146,64 @@
     <Error Condition="'$(TargetFrameworkIdentifier)' != '.NETFramework' AND '%(Reference.Identity)' != '' AND ! Exists('%(Reference.Identity)')"
            Code="MSB3245"
            Text="Could not resolve this reference. Could not locate the package or project for &quot;%(Reference.Identity)&quot;" />
+  </Target>
+
+  <!--
+    Remove @(ResolvedCompileFileDefinitions) and @(RuntimeCopyLocalItems) items for patched assemblies between item
+    generation and use. Instead, ensure @(ProjectReference) items include the patched projects. This covers indirect
+    references and improves test coverage; @(ProjectReference) items were set correctly for direct references. Changes
+    are necessary only in servicing builds, in the release/2.1 branch, and when building non-implementation projects.
+    This is imperfect because it covers only project reference providers i.e. most C# implementation projects.
+  -->
+  <Target Name="_TestPatchedAssemblies"
+      Condition=" $(UseProjectReferences) AND '$(PackagesInPatch)' != '' AND '$(MSBuildProjectName)' != 'TestClient' "
+      AfterTargets="ResolvePackageAssets"
+      BeforeTargets="AssignProjectConfiguration;
+          GenerateBuildDependencyFile;
+          GeneratePublishDependencyFile;
+          ILLink;
+          ResolveLockFileCopyLocalFiles;
+          ResolveLockFileReferences"
+      DependsOnTargets="ResolvePackageAssets">
+    <!-- Find projects patched in this build. -->
+    <ItemGroup>
+      <_ProjectsInPatch Include="$(PackagesInPatch)">
+        <ProjectPath>@(ProjectReferenceProvider-&gt;
+            WithMetadataValue('Identity', '%(_ProjectsInPatch.Identity)')-&gt;'%(ProjectPath)')</ProjectPath>
+        <!-- dotnet-razorpagegenerator is unique in overriding its package ID. -->
+        <ProjectPath
+            Condition=" '%(Identity)' == 'RazorPageGenerator' ">@(ProjectReferenceProvider-&gt;
+              WithMetadataValue('Identity', 'dotnet-razorpagegenerator')-&gt;'%(ProjectPath)')</ProjectPath>
+      </_ProjectsInPatch>
+    </ItemGroup>
+    <!-- Do not warn when unable to find project; many cases e.g. @aspnet/signalr are only used directly. -->
+    <ItemGroup>
+      <ProjectReference Include="@(_ProjectsInPatch->'%(ProjectPath)')"
+          Exclude="@(ProjectReference)"
+          IsImplicitlyDefined="true" />
+    </ItemGroup>
+
+    <!-- Find the items that need to be removed. Project reference providers all match assembly and project names. -->
+    <JoinItems Left="@(ResolvedCompileFileDefinitions)"
+        LeftKey="Filename"
+        Right="@(_ProjectsInPatch->'%(ProjectPath)')"
+        RightKey="Filename"
+        ItemSpecToUse="Left">
+      <Output TaskParameter="JoinResult" ItemName="_ResolvedCompileFileDefinitionsToRemove" />
+    </JoinItems>
+    <JoinItems Left="@(RuntimeCopyLocalItems)"
+        LeftKey="Filename"
+        Right="@(_ProjectsInPatch->'%(ProjectPath)')"
+        RightKey="Filename"
+        ItemSpecToUse="Left">
+      <Output TaskParameter="JoinResult" ItemName="_RuntimeCopyLocalItemsToRemove" />
+    </JoinItems>
+
+    <!-- Perform the actual item removals. -->
+    <ItemGroup>
+      <ResolvedCompileFileDefinitions Remove="@(_ResolvedCompileFileDefinitionsToRemove)" />
+      <RuntimeCopyLocalItems Remove="@(_RuntimeCopyLocalItemsToRemove)" />
+    </ItemGroup>
   </Target>
 
   <!-- These targets are used to generate the map of assembly name to project files. See also the /t:GenerateProjectList target in build/repo.targets. -->
