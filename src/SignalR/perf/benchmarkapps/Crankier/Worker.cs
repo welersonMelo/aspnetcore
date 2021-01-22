@@ -65,7 +65,8 @@ namespace Microsoft.AspNetCore.SignalR.Crankier
                 var client = new Client(_processId, _agent);
                 _clients.Add(client);
 
-                await client.CreateAndStartConnectionAsync(targetAddress, transportType);
+                await client.CreateAndStartConnectionAsync(targetAddress + $"?playerId={Guid.NewGuid().ToString()}", transportType);
+                //await client.CreateAndStartConnectionAsync(targetAddress, transportType);
             }
 
             Log("Connections connected successfully");
